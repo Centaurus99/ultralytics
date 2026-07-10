@@ -99,6 +99,10 @@ from ultralytics.utils.loss import (
 from ultralytics.utils.ops import make_divisible
 from ultralytics.utils.patches import torch_load
 from ultralytics.utils.plotting import feature_visualization
+
+# pika custom layers (external `pika` package, installed editable). Imported at
+# module scope so parse_model's globals()[m] can resolve names like "SHSA".
+from ultralytics.nn.modules.custom import PIKA_CHANNELWISE, SHSA  # noqa: F401
 from ultralytics.utils.torch_utils import (
     fuse_conv_and_bn,
     fuse_deconv_and_bn,
@@ -2023,6 +2027,9 @@ def parse_model(d, ch, verbose=True):
             c2 = args[0]
             c1 = ch[f]
             args = [*args[1:]]
+        elif m in PIKA_CHANNELWISE:  # pika: channel-preserving layers that need c1
+            c1 = c2 = ch[f]
+            args = [c1, *args]
         else:
             c2 = ch[f]
 

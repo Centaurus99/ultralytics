@@ -442,6 +442,44 @@ class Segment26BG(Segment26):
         self.proto = BGProto(ch, self.npr, self.nm, nc)  # boundary-gated protos
 
 
+class Segment26BGP2(Segment26):
+    """Segment26BG with a decoupled high-resolution (P2) prototype branch.
+
+    Detection stays on P3/P4/P5 (stock anchor count, no assigner blow-up) while
+    the Boundary-Gated Prototype taps the P2 (stride-4) feature to emit stride-2
+    masks. Motivated by the pika data: a ~14 px hole is only ~3.5 px on a
+    stride-4 prototype, so its mask is quantisation-bound (hole AP75 ~= 0.01);
+    the finer prototype is what unlocks strict-IoU quality for tiny objects.
+
+    ``ch`` = (P2, P3, P4, P5): detection consumes ``ch[1:]``; proto consumes all.
+    Train with ``mask_ratio=2`` so ground-truth masks match the stride-2 proto.
+    """
+
+    def __init__(self, nc: int = 80, nm: int = 32, npr: int = 256, reg_max=16, end2end=False, ch: tuple = ()):
+        """Build detection on P3-P5 (ch[1:]) but give BGProto the full P2-P5 stack."""
+        super().__init__(nc, nm, npr, reg_max, end2end, ch[1:])  # detect on P3/P4/P5
+        from ultralytics.nn.modules.custom import BGProto
+
+        self.proto = BGProto(ch, self.npr, self.nm, nc)  # proto sees P2..P5
+
+    def forward(self, x: list[torch.Tensor]) -> tuple | list[torch.Tensor] | dict[str, torch.Tensor]:
+        """Route the P2 map (x[0]) to the proto only; detect on x[1:]."""
+        outputs = Detect.forward(self, x[1:])  # detection: P3/P4/P5
+        preds = outputs[1] if isinstance(outputs, tuple) else outputs
+        proto = self.proto(x)  # high-res proto: P2 base fused with P3-P5
+        if isinstance(preds, dict):
+            if self.end2end:
+                preds["one2many"]["proto"] = proto
+                preds["one2one"]["proto"] = (
+                    tuple(p.detach() for p in proto) if isinstance(proto, tuple) else proto.detach()
+                )
+            else:
+                preds["proto"] = proto
+        if self.training:
+            return preds
+        return (outputs, proto) if self.export else ((outputs[0], proto), preds)
+
+
 class OBB(Detect):
     """YOLO OBB detection head for detection with rotation models.
 

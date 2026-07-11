@@ -59,6 +59,7 @@ class SegmentationValidator(DetectionValidator):
         """
         batch = super().preprocess(batch)
         batch["masks"] = batch["masks"].float()
+        self._input_hw = batch["img"].shape[2:]  # letterboxed input HxW (stride-agnostic proto)
         return batch
 
     def init_metrics(self, model: torch.nn.Module) -> None:
@@ -100,7 +101,9 @@ class SegmentationValidator(DetectionValidator):
         """
         proto = preds[0][1] if isinstance(preds[0], tuple) else preds[1]
         preds = super().postprocess(preds[0])
-        imgsz = [4 * x for x in proto.shape[2:]]  # get image size from proto
+        # Real letterboxed input size — correct for any proto stride (a pika
+        # high-res proto is stride-2, not the stock stride-4 that 4*proto assumes).
+        imgsz = getattr(self, "_input_hw", None) or [4 * x for x in proto.shape[2:]]
         for i, pred in enumerate(preds):
             coefficient = pred.pop("extra")
             pred["masks"] = self.process(proto[i], coefficient, pred["bboxes"], shape=imgsz)
@@ -161,7 +164,11 @@ class SegmentationValidator(DetectionValidator):
         if gt_cls.shape[0] == 0 or preds["cls"].shape[0] == 0:
             tp_m = np.zeros((preds["cls"].shape[0], self.niou), dtype=bool)
         else:
-            iou = mask_iou(batch["masks"].flatten(1), preds["masks"].flatten(1).float())  # float, uint8
+            gt_m = batch["masks"]
+            pred_m = preds["masks"].float()
+            if gt_m.shape[1:] != pred_m.shape[1:]:  # stride-agnostic: match GT grid to pred (high-res) proto
+                gt_m = F.interpolate(gt_m[None], pred_m.shape[1:], mode="bilinear", align_corners=False)[0].gt_(0.5).float()
+            iou = mask_iou(gt_m.flatten(1), pred_m.flatten(1))  # float, uint8
             tp_m = self.match_predictions(preds["cls"], gt_cls, iou).cpu().numpy()
         tp.update({"tp_m": tp_m})  # update tp with mask IoU
         return tp

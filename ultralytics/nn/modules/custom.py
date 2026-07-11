@@ -7,10 +7,13 @@ names. ``PIKA_CHANNELWISE`` lists channel-preserving layers that need the input
 channel count (c1) injected by ``parse_model``. See the pika_holes CLAUDE.md.
 """
 
-from pika.modules import SHSA
+from pika.modules import BGProto, SHSA
 
-__all__ = ("SHSA", "PIKA_CHANNELWISE")
+__all__ = ("SHSA", "BGProto", "PIKA_CHANNELWISE")
 
 # Channel-preserving custom layers: parse_model prepends c1 and records c2 = ch[f].
 # YAML usage, e.g.: [-1, 1, SHSA, [0.25]]
 PIKA_CHANNELWISE = frozenset({SHSA})
+
+# BGProto is not a YAML layer; it is instantiated inside the Segment26BG head
+# (see nn/modules/head.py), so it needs no parse_model registration here.

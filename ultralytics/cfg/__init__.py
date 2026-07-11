@@ -197,6 +197,8 @@ CFG_FLOAT_KEYS = frozenset(
     {  # integer or float arguments, i.e. x=2 and x=2.0
         "warmup_epochs",
         "box",
+        "pika_dice",
+        "pika_boundary",
         "cls",
         "dfl",
         "dis",

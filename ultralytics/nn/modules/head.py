@@ -425,6 +425,23 @@ class Segment26(Segment):
             self.proto.fuse()
 
 
+class Segment26BG(Segment26):
+    """YOLO26 Segment head using the pika Boundary-Gated Prototype (BGProto).
+
+    Identical to ``Segment26`` except the prototype generator is ``BGProto``,
+    which injects a learnable Sobel-initialised edge gate into prototype
+    generation to sharpen boundary-dominated tiny-object masks. Algorithm body
+    lives in the framework-agnostic ``pika.modules`` package.
+    """
+
+    def __init__(self, nc: int = 80, nm: int = 32, npr: int = 256, reg_max=16, end2end=False, ch: tuple = ()):
+        """Initialize like Segment26, then swap in BGProto for the proto module."""
+        super().__init__(nc, nm, npr, reg_max, end2end, ch)
+        from ultralytics.nn.modules.custom import BGProto
+
+        self.proto = BGProto(ch, self.npr, self.nm, nc)  # boundary-gated protos
+
+
 class OBB(Detect):
     """YOLO OBB detection head for detection with rotation models.
 

@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from pika.modules import boundary_dice_terms  # pika: boundary-aware mask loss terms
 from ultralytics.utils.metrics import CITYSCAPES_WEIGHT, OKS_SIGMA, RLE_WEIGHT
 from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
 from ultralytics.utils.tal import RotatedTaskAlignedAssigner, TaskAlignedAssigner, dist2bbox, dist2rbox, make_anchors
@@ -492,6 +493,9 @@ class v8SegmentationLoss(v8DetectionLoss):
         super().__init__(model, tal_topk, tal_topk2)
         self.overlap = model.args.overlap_mask
         self.bcedice_loss = BCEDiceLoss(weight_bce=0.5, weight_dice=0.5)
+        # pika: boundary-aware mask loss gains (0 => stock BCE-only behaviour).
+        self.pika_dice = float(getattr(model.args, "pika_dice", 0.0) or 0.0)
+        self.pika_boundary = float(getattr(model.args, "pika_boundary", 0.0) or 0.0)
 
     def loss(self, preds: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         """Calculate and return the combined loss for detection and segmentation."""
@@ -553,9 +557,8 @@ class v8SegmentationLoss(v8DetectionLoss):
         loss[1] *= self.hyp.box  # seg gain
         return loss * batch_size, loss.detach()  # loss(box, seg, cls, dfl, semantic)
 
-    @staticmethod
     def single_mask_loss(
-        gt_mask: torch.Tensor, pred: torch.Tensor, proto: torch.Tensor, xyxy: torch.Tensor, area: torch.Tensor
+        self, gt_mask: torch.Tensor, pred: torch.Tensor, proto: torch.Tensor, xyxy: torch.Tensor, area: torch.Tensor
     ) -> torch.Tensor:
         """Compute the instance segmentation loss for a single image.
 
@@ -571,11 +574,15 @@ class v8SegmentationLoss(v8DetectionLoss):
 
         Notes:
             The function uses the equation pred_mask = torch.einsum('in,nhw->ihw', pred, proto) to produce the
-            predicted masks from the prototype masks and predicted mask coefficients.
+            predicted masks from the prototype masks and predicted mask coefficients. When ``pika_dice`` or
+            ``pika_boundary`` gains are set, per-instance Dice and boundary-band terms are added (see pika_holes).
         """
         pred_mask = torch.einsum("in,nhw->ihw", pred, proto)  # (n, 32) @ (32, 80, 80) -> (n, 80, 80)
         loss = F.binary_cross_entropy_with_logits(pred_mask, gt_mask, reduction="none")
-        return (crop_mask(loss, xyxy).mean(dim=(1, 2)) / area).sum()
+        per_inst = crop_mask(loss, xyxy).mean(dim=(1, 2)) / area
+        if self.pika_dice or self.pika_boundary:
+            per_inst = per_inst + boundary_dice_terms(pred_mask, gt_mask, xyxy, self.pika_dice, self.pika_boundary)
+        return per_inst.sum()
 
     def calculate_segmentation_loss(
         self,

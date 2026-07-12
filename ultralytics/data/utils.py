@@ -392,6 +392,26 @@ def polygons2masks_overlap(
     imgsz: tuple[int, int], segments: list[np.ndarray], downsample_ratio: int = 1
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return a downsampled overlap mask and sorted area indices."""
+    if downsample_ratio == 1:
+        # pika fast path for full-resolution masks (mask_ratio=1): the generic path
+        # below rasterises every instance onto its own full canvas (~800 MB / image
+        # at 1280^2 x 122 instances) just to sort by area and paint. Shoelace areas
+        # give the paint order without rasterising, and painting descending-area
+        # polygons with fillPoly(i+1) onto one shared canvas reproduces the
+        # add-then-clip overwrite semantics exactly.
+        masks = np.zeros(imgsz, dtype=np.int32 if len(segments) > 255 else np.uint8)
+        areas = np.array(
+            [
+                np.abs(np.dot(s[:, 0], np.roll(s[:, 1], -1)) - np.dot(s[:, 1], np.roll(s[:, 0], -1))) / 2
+                for s in (seg.reshape(-1, 2).astype(np.float64) for seg in segments)
+            ]
+            or [0.0]
+        )
+        index = np.argsort(-areas)
+        for i, si in enumerate(index):
+            cv2.fillPoly(masks, [segments[si].reshape(-1, 2).astype(np.int32)], color=i + 1)
+        return masks, index
+
     masks = np.zeros(
         (imgsz[0] // downsample_ratio, imgsz[1] // downsample_ratio),
         dtype=np.int32 if len(segments) > 255 else np.uint8,

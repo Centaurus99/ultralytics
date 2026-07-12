@@ -517,6 +517,12 @@ class Segment26RD(Segment26):
         return out
 
 
+class Segment26RDNS(Segment26RD):
+    """Segment26RD without the instance stamp (ablation): pure ROI-supersampled decoding."""
+
+    STAMP = 0
+
+
 class OBB(Detect):
     """YOLO OBB detection head for detection with rotation models.
 

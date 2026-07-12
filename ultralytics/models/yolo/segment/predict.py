@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pika.modules import decode_rois  # pika: Segment26RD ROI mask decoding
 from ultralytics.engine.results import Results
 from ultralytics.models.yolo.detect.predict import DetectionPredictor
 from ultralytics.utils import DEFAULT_CFG, ops
@@ -78,6 +79,7 @@ class SegmentationPredictor(DetectionPredictor):
             (list[Results]): List of result objects containing the original images, image paths, class names, bounding
                 boxes, and masks.
         """
+        self._pika_rd = getattr(protos, "_pika_rd", None)  # Segment26RD: read before per-image indexing
         return [
             self.construct_result(pred, img, orig_img, img_path, proto)
             for pred, orig_img, img_path, proto in zip(preds, orig_imgs, self.batch[0], protos)
@@ -98,6 +100,9 @@ class SegmentationPredictor(DetectionPredictor):
         """
         if pred.shape[0] == 0:  # save empty boxes
             masks = None
+        elif getattr(self, "_pika_rd", None) is not None:  # Segment26RD ROI decoding
+            masks = decode_rois(proto, pred[:, 6:], pred[:, :4], img.shape[2:], **self._pika_rd)  # NHW
+            pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
         elif self.args.retina_masks:
             pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
             masks = ops.process_mask_native(proto, pred[:, 6:], pred[:, :4], orig_img.shape[:2])  # NHW

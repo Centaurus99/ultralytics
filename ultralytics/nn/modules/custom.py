@@ -7,9 +7,9 @@ names. ``PIKA_CHANNELWISE`` lists channel-preserving layers that need the input
 channel count (c1) injected by ``parse_model``. See the pika_holes CLAUDE.md.
 """
 
-from pika.modules import BGProto, SHSA
+from pika.modules import BGProto, SHSA, decode_rois, roi_mask_loss
 
-__all__ = ("SHSA", "BGProto", "PIKA_CHANNELWISE")
+__all__ = ("SHSA", "BGProto", "PIKA_CHANNELWISE", "decode_rois", "roi_mask_loss")
 
 # Channel-preserving custom layers: parse_model prepends c1 and records c2 = ch[f].
 # YAML usage, e.g.: [-1, 1, SHSA, [0.25]]

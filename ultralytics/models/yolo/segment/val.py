@@ -9,6 +9,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from pika.modules import decode_rois  # pika: Segment26RD ROI mask decoding
 from ultralytics.models.yolo.detect import DetectionValidator
 from ultralytics.utils import LOGGER, ops
 from ultralytics.utils.checks import check_requirements
@@ -100,13 +101,17 @@ class SegmentationValidator(DetectionValidator):
             (list[dict[str, torch.Tensor]]): Processed detection predictions with masks.
         """
         proto = preds[0][1] if isinstance(preds[0], tuple) else preds[1]
+        rd = getattr(proto, "_pika_rd", None)  # Segment26RD: ROI decoding replaces prototype assembly
         preds = super().postprocess(preds[0])
         # Real letterboxed input size — correct for any proto stride (a pika
         # high-res proto is stride-2, not the stock stride-4 that 4*proto assumes).
         imgsz = getattr(self, "_input_hw", None) or [4 * x for x in proto.shape[2:]]
         for i, pred in enumerate(preds):
             coefficient = pred.pop("extra")
-            pred["masks"] = self.process(proto[i], coefficient, pred["bboxes"], shape=imgsz)
+            if rd is not None:
+                pred["masks"] = decode_rois(proto[i], coefficient, pred["bboxes"], imgsz, **rd)
+            else:
+                pred["masks"] = self.process(proto[i], coefficient, pred["bboxes"], shape=imgsz)
         return preds
 
     def _prepare_batch(self, si: int, batch: dict[str, Any]) -> dict[str, Any]:
@@ -167,7 +172,11 @@ class SegmentationValidator(DetectionValidator):
             gt_m = batch["masks"]
             pred_m = preds["masks"].float()
             if gt_m.shape[1:] != pred_m.shape[1:]:  # stride-agnostic: match GT grid to pred (high-res) proto
-                gt_m = F.interpolate(gt_m[None], pred_m.shape[1:], mode="bilinear", align_corners=False)[0].gt_(0.5).float()
+                gt_m = (
+                    F.interpolate(gt_m[None], pred_m.shape[1:], mode="bilinear", align_corners=False)[0]
+                    .gt_(0.5)
+                    .float()
+                )
             iou = mask_iou(gt_m.flatten(1), pred_m.flatten(1))  # float, uint8
             tp_m = self.match_predictions(preds["cls"], gt_cls, iou).cpu().numpy()
         tp.update({"tp_m": tp_m})  # update tp with mask IoU

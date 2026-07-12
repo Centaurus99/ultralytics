@@ -480,6 +480,43 @@ class Segment26BGP2(Segment26):
         return (outputs, proto) if self.export else ((outputs[0], proto), preds)
 
 
+class Segment26RD(Segment26):
+    """Segment26 with boundary-gated prototypes and ROI-supersampled mask decoding (pika Round 6).
+
+    Masks are no longer assembled on the global stride-4 prototype grid. Each anchor predicts
+    ``nm`` prototype coefficients plus an 8x8 instance-private "stamp" of mask logits; instances
+    are decoded on per-box supersampled ROI grids (``pika.modules.roi``), and the mask loss is
+    computed in ROI space against full-resolution GT (train with ``mask_ratio=1``). This attacks
+    the three quantisation/rank limits diagnosed in pika Rounds 1-5: stride-4 supervision,
+    stride-4 output assembly, and the rank-``nm`` shared-prototype bottleneck. The stamp output
+    rows start zero-initialised so training begins as pure prototype combination.
+    """
+
+    STAMP = 8  # instance stamp side; per-anchor mask channels = nm + STAMP**2
+
+    def __init__(self, nc: int = 80, nm: int = 32, npr: int = 256, reg_max=16, end2end=False, ch: tuple = ()):
+        """Build cv4 for ``nm + STAMP**2`` channels but keep ``nm`` boundary-gated prototypes."""
+        super().__init__(nc, nm + self.STAMP**2, npr, reg_max, end2end, ch)
+        from ultralytics.nn.modules.custom import BGProto
+
+        self.proto = BGProto(ch, self.npr, nm, nc)  # nm boundary-gated protos (not nm + stamp)
+        self.pika_roi = {"ncoef": nm, "stamp": self.STAMP}
+        for head in (self.cv4, getattr(self, "one2one_cv4", None)):
+            if head is not None:
+                for seq in head:
+                    with torch.no_grad():  # stamp fades in residually from zero
+                        seq[-1].weight[nm:].zero_()
+                        seq[-1].bias[nm:].zero_()
+
+    def forward(self, x: list[torch.Tensor]) -> tuple | list[torch.Tensor] | dict[str, torch.Tensor]:
+        """Mark the eval-time proto tensor so validators/predictors route to ROI decoding."""
+        out = super().forward(x)
+        if not self.training:
+            proto = out[1] if self.export else out[0][1]
+            proto._pika_rd = self.pika_roi
+        return out
+
+
 class OBB(Detect):
     """YOLO OBB detection head for detection with rotation models.
 

@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from pika.modules import boundary_dice_terms  # pika: boundary-aware mask loss terms
+from pika.modules import boundary_dice_terms, roi_mask_loss  # pika: boundary/ROI mask loss terms
 from ultralytics.utils.metrics import CITYSCAPES_WEIGHT, OKS_SIGMA, RLE_WEIGHT
 from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
 from ultralytics.utils.tal import RotatedTaskAlignedAssigner, TaskAlignedAssigner, dist2bbox, dist2rbox, make_anchors
@@ -496,6 +496,8 @@ class v8SegmentationLoss(v8DetectionLoss):
         # pika: boundary-aware mask loss gains (0 => stock BCE-only behaviour).
         self.pika_dice = float(getattr(model.args, "pika_dice", 0.0) or 0.0)
         self.pika_boundary = float(getattr(model.args, "pika_boundary", 0.0) or 0.0)
+        # pika: ROI-supersampled mask decoding (Segment26RD) — {"ncoef": .., "stamp": ..} or None.
+        self.pika_roi = getattr(model.model[-1], "pika_roi", None)
 
     def loss(self, preds: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         """Calculate and return the combined loss for detection and segmentation."""
@@ -513,7 +515,9 @@ class v8SegmentationLoss(v8DetectionLoss):
         if fg_mask.sum():
             # Masks loss
             masks = batch["masks"].to(self.device).float()
-            if tuple(masks.shape[-2:]) != (mask_h, mask_w):  # downsample
+            # pika ROI loss samples proto and GT on the same normalised grids at any
+            # resolution pair; only the stock full-grid path needs them aligned.
+            if tuple(masks.shape[-2:]) != (mask_h, mask_w) and not self.pika_roi:  # downsample
                 # masks = F.interpolate(masks[None], (mask_h, mask_w), mode="nearest")[0]
                 proto = F.interpolate(proto, masks.shape[-2:], mode="bilinear", align_corners=False)
 
@@ -615,6 +619,26 @@ class v8SegmentationLoss(v8DetectionLoss):
             For example, pred_mask can be computed as follows:
                 pred_mask = torch.einsum('in,nhw->ihw', pred, proto)  # (i, 32) @ (32, 160, 160) -> (i, 160, 160)
         """
+        if self.pika_roi:  # Segment26RD: per-instance ROI-space BCE against the GT index map
+            assert self.overlap, "pika ROI mask loss requires overlap_mask=True"
+            hw = (int(imgsz[0]), int(imgsz[1]))
+            loss = torch.zeros((), device=self.device)
+            for i in range(fg_mask.shape[0]):
+                fg = fg_mask[i]
+                if fg.any():
+                    loss = loss + roi_mask_loss(
+                        proto[i],
+                        pred_masks[i][fg],
+                        target_bboxes[i][fg],
+                        masks[i],
+                        target_gt_idx[i][fg],
+                        hw,
+                        **self.pika_roi,
+                    )
+                else:  # keep DDP gradients alive, mirroring the stock path below
+                    loss = loss + (proto * 0).sum() + (pred_masks * 0).sum()
+            return loss / fg_mask.sum()
+
         _, _, mask_h, mask_w = proto.shape
         loss = 0
 

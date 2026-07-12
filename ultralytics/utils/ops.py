@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import math
+import os
 import re
 import time
 
@@ -465,6 +466,12 @@ def resample_segments(segments, n: int = 1000):
     return segments
 
 
+# pika: test-time mask binarisation threshold (logit space). The annotation-ceiling
+# analysis showed predictions run systematically fat (hole median area +8%); raising
+# tau slims all masks without retraining. 0 = stock behaviour.
+PIKA_MASK_TAU = float(os.getenv("PIKA_MASK_TAU", "0"))
+
+
 def crop_mask(masks: torch.Tensor, boxes: torch.Tensor) -> torch.Tensor:
     """Crop masks to bounding box regions.
 
@@ -514,7 +521,7 @@ def process_mask(protos, masks_in, bboxes, shape, upsample: bool = False):
     masks = crop_mask(masks, boxes=bboxes * ratios)  # NHW
     if upsample:
         masks = F.interpolate(masks[None], shape, mode="bilinear")[0]  # NHW
-    return masks.gt_(0.0).byte()
+    return masks.gt_(PIKA_MASK_TAU).byte()
 
 
 def process_mask_native(protos, masks_in, bboxes, shape):
@@ -539,7 +546,7 @@ def process_mask_native(protos, masks_in, bboxes, shape):
     # uint8 immediately so the float intermediate stays small, then crop the assembled uint8 stack.
     step = max(1, 32_000_000 // (h * w))
     masks = [
-        scale_masks(coeffs[i : i + step].view(-1, mh, mw)[None], shape)[0].gt_(0.0).byte()
+        scale_masks(coeffs[i : i + step].view(-1, mh, mw)[None], shape)[0].gt_(PIKA_MASK_TAU).byte()
         for i in range(0, coeffs.shape[0], step)
     ]
     return crop_mask(torch.cat(masks), bboxes)

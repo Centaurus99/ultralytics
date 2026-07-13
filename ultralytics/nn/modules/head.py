@@ -387,6 +387,8 @@ class Segment26(Segment):
         >>> outputs = segment(x)
     """
 
+    det_start = 0  # first feature the detection pyramid consumes; proto sees all of x
+
     def __init__(self, nc: int = 80, nm: int = 32, npr: int = 256, reg_max=16, end2end=False, ch: tuple = ()):
         """Initialize the YOLO model attributes such as the number of masks, prototypes, and the convolution layers.
 
@@ -403,7 +405,7 @@ class Segment26(Segment):
 
     def forward(self, x: list[torch.Tensor]) -> tuple | list[torch.Tensor] | dict[str, torch.Tensor]:
         """Return model outputs and mask coefficients if training, otherwise return outputs and mask coefficients."""
-        outputs = Detect.forward(self, x)
+        outputs = Detect.forward(self, x[self.det_start :])
         preds = outputs[1] if isinstance(outputs, tuple) else outputs
         proto = self.proto(x)  # mask protos
         if isinstance(preds, dict):  # training and validating during training
@@ -455,29 +457,14 @@ class Segment26BGP2(Segment26):
     Train with ``mask_ratio=2`` so ground-truth masks match the stride-2 proto.
     """
 
+    det_start = 1  # x[0] is the P2 map: proto-only, not a detection level
+
     def __init__(self, nc: int = 80, nm: int = 32, npr: int = 256, reg_max=16, end2end=False, ch: tuple = ()):
         """Build detection on P3-P5 (ch[1:]) but give BGProto the full P2-P5 stack."""
         super().__init__(nc, nm, npr, reg_max, end2end, ch[1:])  # detect on P3/P4/P5
         from ultralytics.nn.modules.custom import BGProto
 
         self.proto = BGProto(ch, self.npr, self.nm, nc)  # proto sees P2..P5
-
-    def forward(self, x: list[torch.Tensor]) -> tuple | list[torch.Tensor] | dict[str, torch.Tensor]:
-        """Route the P2 map (x[0]) to the proto only; detect on x[1:]."""
-        outputs = Detect.forward(self, x[1:])  # detection: P3/P4/P5
-        preds = outputs[1] if isinstance(outputs, tuple) else outputs
-        proto = self.proto(x)  # high-res proto: P2 base fused with P3-P5
-        if isinstance(preds, dict):
-            if self.end2end:
-                preds["one2many"]["proto"] = proto
-                preds["one2one"]["proto"] = (
-                    tuple(p.detach() for p in proto) if isinstance(proto, tuple) else proto.detach()
-                )
-            else:
-                preds["proto"] = proto
-        if self.training:
-            return preds
-        return (outputs, proto) if self.export else ((outputs[0], proto), preds)
 
 
 class Segment26RD(Segment26):
@@ -493,6 +480,7 @@ class Segment26RD(Segment26):
     """
 
     STAMP = 8  # instance stamp side; per-anchor mask channels = nm + STAMP**2
+    TRAIN_SIZES = (28,)  # training ROI grid buckets (see pika.modules.roi_mask_loss)
 
     def __init__(self, nc: int = 80, nm: int = 32, npr: int = 256, reg_max=16, end2end=False, ch: tuple = ()):
         """Build cv4 for ``nm + STAMP**2`` channels but keep ``nm`` boundary-gated prototypes."""
@@ -500,7 +488,7 @@ class Segment26RD(Segment26):
         from ultralytics.nn.modules.custom import BGProto
 
         self.proto = BGProto(ch, self.npr, nm, nc)  # nm boundary-gated protos (not nm + stamp)
-        self.pika_roi = {"ncoef": nm, "stamp": self.STAMP}
+        self.pika_roi = {"ncoef": nm, "stamp": self.STAMP}  # decode args; loss adds TRAIN_SIZES
         for head in (self.cv4, getattr(self, "one2one_cv4", None)):
             if head is not None:
                 for seq in head:
@@ -521,6 +509,43 @@ class Segment26RDNS(Segment26RD):
     """Segment26RD without the instance stamp (ablation): pure ROI-supersampled decoding."""
 
     STAMP = 0
+
+
+class Segment26RDNSA(Segment26RDNS):
+    """Segment26RDNS with size-adaptive training ROI grids (pika Round 10).
+
+    Fixed 28x28 training grids undersample large instances (a median padded
+    patch spans ~50 px at imgsz 1280 -> ~0.55 samples/px) while inference decodes
+    at >=1 sample/px — a train/test sampling-density mismatch. Buckets mirror the
+    inference rule: smallest grid >= padded box side, capped at 112 for cost.
+    """
+
+    TRAIN_SIZES = (28, 56, 112)
+
+
+class Segment26RDNSP2(Segment26RDNS):
+    """Segment26RDNS with the prototype base moved from P3 to P2 (pika Round 10).
+
+    The stock "stride-4" prototype map is transpose-upsampled from stride-8 head
+    features, so its true bandwidth is stride 8 — ~1.3 real samples across a
+    10 px hole, the dominant residual error mass (Round 10 error anatomy; the
+    box-mask AP gap is a scale-invariant ~0.10 across n/s/m/l). Here BGProto
+    fuses the raw backbone P2 map (stride 4, native) with the P3-P5 head maps
+    and skips the transpose-up: the proto grid stays stride 4 but carries
+    genuinely stride-4 information. Detection stays on P3/P4/P5 (stock anchors);
+    the ROI decode/loss are sampling-grid agnostic, so nothing else changes.
+
+    ``ch`` = (P2, P3, P4, P5); detection consumes ``ch[1:]``.
+    """
+
+    det_start = 1  # x[0] is the raw backbone P2 map: proto-only
+
+    def __init__(self, nc: int = 80, nm: int = 32, npr: int = 256, reg_max=16, end2end=False, ch: tuple = ()):
+        """Build detection on P3-P5 (ch[1:]); BGProto sees P2-P5, no transpose-up."""
+        super().__init__(nc, nm, npr, reg_max, end2end, ch[1:])
+        from ultralytics.nn.modules.custom import BGProto
+
+        self.proto = BGProto(ch, self.npr, nm, nc, upsample=False)
 
 
 class OBB(Detect):

@@ -499,6 +499,14 @@ class v8SegmentationLoss(v8DetectionLoss):
         # pika: ROI-supersampled mask decoding (Segment26RD) — {"ncoef": .., "stamp": ..} or None.
         self.pika_roi = getattr(model.model[-1], "pika_roi", None)
         self.pika_sizes = getattr(model.model[-1], "TRAIN_SIZES", (28,))
+        # pika: mask-quality channel index (Segment26RDIQ) and area-consistency gain.
+        head = model.model[-1]
+        self.pika_iou_index = (
+            head.pika_roi["ncoef"] + head.pika_roi["stamp"] ** 2
+            if self.pika_roi and getattr(head, "IOU_HEAD", 0)
+            else None
+        )
+        self.pika_area = float(getattr(model.args, "pika_area", 0.0) or 0.0)
 
     def loss(self, preds: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         """Calculate and return the combined loss for detection and segmentation."""
@@ -635,6 +643,8 @@ class v8SegmentationLoss(v8DetectionLoss):
                         target_gt_idx[i][fg],
                         hw,
                         sizes=self.pika_sizes,
+                        iou_index=self.pika_iou_index,
+                        area_gain=self.pika_area,
                         **self.pika_roi,
                     )
                 else:  # keep DDP gradients alive, mirroring the stock path below

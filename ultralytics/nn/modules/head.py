@@ -481,10 +481,12 @@ class Segment26RD(Segment26):
 
     STAMP = 8  # instance stamp side; per-anchor mask channels = nm + STAMP**2
     TRAIN_SIZES = (28,)  # training ROI grid buckets (see pika.modules.roi_mask_loss)
+    IOU_HEAD = 0  # 1 => one extra cv4 channel: mask-quality logit (Mask-Scoring style)
 
     def __init__(self, nc: int = 80, nm: int = 32, npr: int = 256, reg_max=16, end2end=False, ch: tuple = ()):
-        """Build cv4 for ``nm + STAMP**2`` channels but keep ``nm`` boundary-gated prototypes."""
-        super().__init__(nc, nm + self.STAMP**2, npr, reg_max, end2end, ch)
+        """Build cv4 for ``nm + STAMP**2 (+1)`` channels but keep ``nm`` boundary-gated prototypes."""
+        assert not (self.STAMP and self.IOU_HEAD), "quality head assumes the no-stamp layout"
+        super().__init__(nc, nm + self.STAMP**2 + self.IOU_HEAD, npr, reg_max, end2end, ch)
         from ultralytics.nn.modules.custom import BGProto
 
         self.proto = BGProto(ch, self.npr, nm, nc)  # nm boundary-gated protos (not nm + stamp)
@@ -492,7 +494,7 @@ class Segment26RD(Segment26):
         for head in (self.cv4, getattr(self, "one2one_cv4", None)):
             if head is not None:
                 for seq in head:
-                    with torch.no_grad():  # stamp fades in residually from zero
+                    with torch.no_grad():  # stamp/quality rows fade in residually from zero
                         seq[-1].weight[nm:].zero_()
                         seq[-1].bias[nm:].zero_()
 
@@ -509,6 +511,28 @@ class Segment26RDNS(Segment26RD):
     """Segment26RD without the instance stamp (ablation): pure ROI-supersampled decoding."""
 
     STAMP = 0
+
+
+class Segment26RDIQ(Segment26RDNS):
+    """Segment26RDNS + a one-channel mask-quality head (pika Round 11).
+
+    Score and mask IoU correlate weakly on this data (Spearman ~0.6, Round 10
+    error anatomy), which directly costs strict-IoU AP through ranking noise.
+    The last cv4 channel is a quality logit supervised against the *measured*
+    soft-IoU of the decoded ROI mask (computed for free inside the ROI loss —
+    no extra decode pass, unlike Mask Scoring R-CNN's IoU head). At inference
+    the sigmoid quality multiplies the class scores *before* the NMS-free top-k,
+    so ranking, confidence output and downstream thresholds all see calibrated
+    scores. Zero-init makes the factor a rank-neutral constant 0.5 at start.
+    """
+
+    IOU_HEAD = 1
+
+    def _inference(self, x: dict[str, torch.Tensor]) -> torch.Tensor:
+        """Calibrate class scores by predicted mask quality before top-k."""
+        preds = super()._inference(x)  # (bs, 4 + nc + nm, N); quality logit is last
+        preds[:, 4 : 4 + self.nc] *= preds[:, -1:].sigmoid()
+        return preds
 
 
 class Segment26RDNSA(Segment26RDNS):

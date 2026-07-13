@@ -198,6 +198,7 @@ CFG_FLOAT_KEYS = frozenset(
         "warmup_epochs",
         "box",
         "pika_dice",
+        "pika_area",
         "pika_boundary",
         "cls",
         "dfl",

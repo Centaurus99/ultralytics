@@ -498,6 +498,10 @@ class v8SegmentationLoss(v8DetectionLoss):
         self.pika_boundary = float(getattr(model.args, "pika_boundary", 0.0) or 0.0)
         # pika: ROI-supersampled mask decoding (Segment26RD) — {"ncoef": .., "stamp": ..} or None.
         self.pika_roi = getattr(model.model[-1], "pika_roi", None)
+        assert int(getattr(model.args, "pika_gt_scale", 1) or 1) == 1 or self.pika_roi, (
+            "pika_gt_scale needs an ROI-decoding head (Segment26RD family): the stock path "
+            "upsamples the prototypes to the GT grid, which a k-times raster makes intractable"
+        )
         self.pika_sizes = getattr(model.model[-1], "TRAIN_SIZES", (28,))
         # pika: mask-quality channel index (Segment26RDIQ) and area-consistency gain.
         head = model.model[-1]
@@ -548,7 +552,11 @@ class v8SegmentationLoss(v8DetectionLoss):
                 sem_masks = F.one_hot(sem_masks.long(), num_classes=self.nc).permute(0, 3, 1, 2).float()  # NxCxHxW
 
                 if self.overlap:
-                    mask_zero = masks == 0  # NxHxW
+                    idx_map = masks
+                    if idx_map.shape[-1] != sem_masks.shape[-1]:  # pika: sub-pixel GT raster
+                        k = idx_map.shape[-1] // sem_masks.shape[-1]
+                        idx_map = idx_map[..., ::k, ::k]
+                    mask_zero = idx_map == 0  # NxHxW
                     sem_masks[mask_zero.unsqueeze(1).expand_as(sem_masks)] = 0
                 else:
                     batch_idx = batch["batch_idx"].view(-1)  # [total_instances]

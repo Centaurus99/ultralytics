@@ -239,6 +239,7 @@ class YOLODataset(BaseDataset):
                 batch_idx=True,
                 mask_ratio=hyp.mask_ratio,
                 mask_overlap=hyp.overlap_mask,
+                gt_scale=getattr(hyp, "pika_gt_scale", 1) or 1,  # pika: sub-pixel GT raster
                 bgr=hyp.bgr if self.augment else 0.0,  # only affect training.
             )
         )

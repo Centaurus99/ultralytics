@@ -2227,6 +2227,7 @@ class Format(BaseTransform):
         mask_overlap: bool = True,
         batch_idx: bool = True,
         bgr: float = 0.0,
+        gt_scale: int = 1,
     ):
         """Initialize the Format class with given parameters for image and instance annotation formatting.
 
@@ -2243,6 +2244,11 @@ class Format(BaseTransform):
             mask_overlap (bool): If True, allows mask overlap.
             batch_idx (bool): If True, keeps batch indexes.
             bgr (float): Probability of returning BGR images instead of RGB.
+            gt_scale (int): pika — rasterise the instance GT on a ``gt_scale``x finer canvas
+                (sub-pixel labels). Polygon annotations carry sub-pixel vertices that a 1x
+                raster throws away: on a 14 px hole the +-0.5 px quantisation of the label is
+                the same order as the model's residual boundary error. Only useful with a
+                decoder that samples the GT at arbitrary points (the pika ROI head).
         """
         self.bbox_format = bbox_format
         self.normalize = normalize
@@ -2253,6 +2259,7 @@ class Format(BaseTransform):
         self.mask_overlap = mask_overlap
         self.batch_idx = batch_idx  # keep the batch indexes
         self.bgr = bgr
+        self.gt_scale = int(gt_scale)
 
     def get_params(self, labels: dict[str, Any]) -> dict[str, Any]:
         """Compute formatting parameters shared across image and instance formatting.
@@ -2318,7 +2325,10 @@ class Format(BaseTransform):
                 if not masks.shape[0] or not cls_tensor.numel():
                     sem_masks = torch.zeros(h // self.mask_ratio, w // self.mask_ratio)
                 elif self.mask_overlap:
-                    sem_masks = cls_tensor[masks[0].long() - 1]  # (H, W) from (1, H, W) instance indices
+                    # pika: the semantic branch keeps the 1x grid even under a sub-pixel GT
+                    # raster — decimating the index map is exact and avoids a k^2 one-hot.
+                    idx = masks[0][:: self.gt_scale, :: self.gt_scale] if self.gt_scale > 1 else masks[0]
+                    sem_masks = cls_tensor[idx.long() - 1]  # (H, W) from (1, H, W) instance indices
                 else:
                     # Create sem_masks consistent with mask_overlap=True
                     sem_masks = (masks * cls_tensor[:, None, None]).max(0).values  # (H, W) from (N, H, W) binary
@@ -2408,6 +2418,12 @@ class Format(BaseTransform):
             - Masks are downsampled according to self.mask_ratio.
         """
         segments = instances.segments
+        if self.gt_scale > 1:  # pika: sub-pixel labels — rasterise the same polygons finer
+            assert self.mask_ratio == 1, "pika_gt_scale needs mask_ratio=1 (ROI-decoded masks)"
+            k = self.gt_scale
+            masks, sorted_idx = polygons2masks_overlap((h * k, w * k), segments * k, downsample_ratio=1)
+            masks = masks[None]
+            return masks, instances[sorted_idx], cls[sorted_idx]
         if self.mask_overlap:
             masks, sorted_idx = polygons2masks_overlap((h, w), segments, downsample_ratio=self.mask_ratio)
             masks = masks[None]  # (640, 640) -> (1, 640, 640)

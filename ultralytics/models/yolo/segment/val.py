@@ -128,6 +128,9 @@ class SegmentationValidator(DetectionValidator):
         nl = prepared_batch["cls"].shape[0]
         if self.args.overlap_mask:
             masks = batch["masks"][si]
+            k = masks.shape[-1] // int(prepared_batch["imgsz"][1])  # pika: sub-pixel GT raster
+            if k > 1:  # decimate the index map *before* expanding to (nl, H, W) — k^2 memory
+                masks = masks[..., ::k, ::k]
             index = torch.arange(1, nl + 1, device=masks.device).view(nl, 1, 1)
             masks = (masks == index).float()
         else:

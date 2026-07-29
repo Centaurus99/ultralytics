@@ -246,6 +246,7 @@ CFG_INT_KEYS = frozenset(
         "seed",
         "close_mosaic",
         "mask_ratio",
+        "pika_gt_scale",
         "max_det",
         "vid_stride",
         "line_width",

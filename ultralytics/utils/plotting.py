@@ -774,6 +774,10 @@ def plot_images(
     kpts = labels.get("keypoints", np.zeros(0, dtype=np.float32))
     semantic_masks = labels.get("semantic_mask", np.zeros(0, dtype=np.int64))
     images = labels.get("img", images)  # default to input images
+    if len(masks) and len(images) and masks.shape[-1] > images.shape[-1]:
+        # pika: sub-pixel GT raster — decimate before the per-instance expansion below,
+        # which would otherwise allocate k^2 x (n_instances x canvas) floats just to draw.
+        masks = masks[..., :: masks.shape[-1] // images.shape[-1], :: masks.shape[-1] // images.shape[-1]]
 
     if len(images) and isinstance(images, torch.Tensor):
         images = images.cpu().float().numpy()

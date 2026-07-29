@@ -572,6 +572,41 @@ class Segment26RDNSP2(Segment26RDNS):
         self.proto = BGProto(ch, self.npr, nm, nc, upsample=False)
 
 
+class Segment26RDG(Segment26RDNS):
+    """Segment26RDNS + image-guided prototypes (pika Round 14).
+
+    The Round 14 error budget leaves all remaining AP in sub-pixel boundary
+    placement, yet the mask branch's finest evidence is the stride-8 P3 map.
+    ``GuidedProto`` widens the prototype bank with ``IMG_PROTOS`` channels
+    computed by a private stride-4 stem on the raw input image, so the linear
+    prototype combination can see full-resolution detail. Decoding, loss and
+    inference are unchanged (a mask is still a pointwise linear combination),
+    and the mask gradient never touches the shared backbone — the failure mode
+    that sank the P2-based prototype of Round 10.
+
+    The new coefficient rows are zero-initialised, so a checkpoint transplanted
+    from an RDNS run starts at exactly its old behaviour and fades guidance in.
+    """
+
+    IMG_PROTOS = 4
+    PIKA_WANTS_IMG = True  # ``_predict_once`` stashes the input image on the proto
+
+    def __init__(self, nc: int = 80, nm: int = 32, npr: int = 256, reg_max=16, end2end=False, ch: tuple = ()):
+        """Build ``nm`` feature prototypes plus ``IMG_PROTOS`` image-derived ones."""
+        total = nm + self.IMG_PROTOS
+        super().__init__(nc, total, npr, reg_max, end2end, ch)
+        from ultralytics.nn.modules.custom import GuidedProto
+
+        self.proto = GuidedProto(ch, self.npr, total, nc, n_img=self.IMG_PROTOS)
+        self.pika_roi = {"ncoef": total, "stamp": self.STAMP}
+        for head in (self.cv4, getattr(self, "one2one_cv4", None)):
+            if head is not None:
+                for seq in head:
+                    with torch.no_grad():  # image-prototype rows fade in residually from zero
+                        seq[-1].weight[nm:].zero_()
+                        seq[-1].bias[nm:].zero_()
+
+
 class OBB(Detect):
     """YOLO OBB detection head for detection with rotation models.
 

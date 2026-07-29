@@ -73,6 +73,7 @@ from ultralytics.nn.modules import (
     Segment26RDIQ,
     Segment26RDNSA,
     Segment26RDNSP2,
+    Segment26RDG,
     SemanticSegment,
     TorchVision,
     WorldDetect,
@@ -196,6 +197,10 @@ class BaseModel(torch.nn.Module):
         y, dt, embeddings = [], [], []  # outputs
         embed = frozenset(embed) if embed is not None else {-1}
         max_idx = max(embed)
+        if getattr(self.model[-1], "PIKA_WANTS_IMG", False):
+            # pika: image-guided prototypes need the raw input, which never reaches the
+            # head through the feature list (see pika.modules.GuidedProto).
+            self.model[-1].proto.pika_img = x
         for m in self.model:
             if m.f != -1:  # if not from previous layer
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
@@ -2010,6 +2015,7 @@ def parse_model(d, ch, verbose=True):
                 Segment26RDIQ,
                 Segment26RDNSA,
                 Segment26RDNSP2,
+                Segment26RDG,
                 YOLOESegment,
                 YOLOESegment26,
                 Pose,
@@ -2019,9 +2025,39 @@ def parse_model(d, ch, verbose=True):
             }
         ):
             args.extend([reg_max, end2end, [ch[x] for x in f]])
-            if m in {Segment, YOLOESegment, Segment26, Segment26BG, Segment26BGP2, Segment26RD, Segment26RDIQ, Segment26RDNS, Segment26RDNSA, Segment26RDNSP2, YOLOESegment26}:
+            if m in {
+                Segment,
+                YOLOESegment,
+                Segment26,
+                Segment26BG,
+                Segment26BGP2,
+                Segment26RD,
+                Segment26RDIQ,
+                Segment26RDNS,
+                Segment26RDNSA,
+                Segment26RDNSP2,
+                YOLOESegment26,
+            }:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
-            if m in {Detect, YOLOEDetect, Segment, Segment26, Segment26BG, Segment26BGP2, Segment26RD, Segment26RDIQ, Segment26RDNS, Segment26RDNSA, Segment26RDNSP2, YOLOESegment, YOLOESegment26, Pose, Pose26, OBB, OBB26}:
+            if m in {
+                Detect,
+                YOLOEDetect,
+                Segment,
+                Segment26,
+                Segment26BG,
+                Segment26BGP2,
+                Segment26RD,
+                Segment26RDIQ,
+                Segment26RDNS,
+                Segment26RDNSA,
+                Segment26RDNSP2,
+                YOLOESegment,
+                YOLOESegment26,
+                Pose,
+                Pose26,
+                OBB,
+                OBB26,
+            }:
                 m.legacy = legacy
         elif m is SemanticSegment:
             args.append([ch[x] for x in f])  # nc, ch tuple

@@ -2327,7 +2327,8 @@ class Format(BaseTransform):
                 elif self.mask_overlap:
                     # pika: the semantic branch keeps the 1x grid even under a sub-pixel GT
                     # raster — decimating the index map is exact and avoids a k^2 one-hot.
-                    idx = masks[0][:: self.gt_scale, :: self.gt_scale] if self.gt_scale > 1 else masks[0]
+                    k = self.gt_scale
+                    idx = masks[0][k // 2 :: k, k // 2 :: k] if k > 1 else masks[0]
                     sem_masks = cls_tensor[idx.long() - 1]  # (H, W) from (1, H, W) instance indices
                 else:
                     # Create sem_masks consistent with mask_overlap=True

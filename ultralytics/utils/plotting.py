@@ -777,7 +777,8 @@ def plot_images(
     if len(masks) and len(images) and masks.shape[-1] > images.shape[-1]:
         # pika: sub-pixel GT raster — decimate before the per-instance expansion below,
         # which would otherwise allocate k^2 x (n_instances x canvas) floats just to draw.
-        masks = masks[..., :: masks.shape[-1] // images.shape[-1], :: masks.shape[-1] // images.shape[-1]]
+        k = masks.shape[-1] // images.shape[-1]
+        masks = masks[..., k // 2 :: k, k // 2 :: k]
 
     if len(images) and isinstance(images, torch.Tensor):
         images = images.cpu().float().numpy()

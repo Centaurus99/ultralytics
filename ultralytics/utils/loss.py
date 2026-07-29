@@ -555,7 +555,7 @@ class v8SegmentationLoss(v8DetectionLoss):
                     idx_map = masks
                     if idx_map.shape[-1] != sem_masks.shape[-1]:  # pika: sub-pixel GT raster
                         k = idx_map.shape[-1] // sem_masks.shape[-1]
-                        idx_map = idx_map[..., ::k, ::k]
+                        idx_map = idx_map[..., k // 2 :: k, k // 2 :: k]
                     mask_zero = idx_map == 0  # NxHxW
                     sem_masks[mask_zero.unsqueeze(1).expand_as(sem_masks)] = 0
                 else:

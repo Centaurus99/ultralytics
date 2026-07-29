@@ -130,7 +130,7 @@ class SegmentationValidator(DetectionValidator):
             masks = batch["masks"][si]
             k = masks.shape[-1] // int(prepared_batch["imgsz"][1])  # pika: sub-pixel GT raster
             if k > 1:  # decimate the index map *before* expanding to (nl, H, W) — k^2 memory
-                masks = masks[..., ::k, ::k]
+                masks = masks[..., k // 2 :: k, k // 2 :: k]  # block centre, not corner
             index = torch.arange(1, nl + 1, device=masks.device).view(nl, 1, 1)
             masks = (masks == index).float()
         else:

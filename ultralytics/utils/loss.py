@@ -511,17 +511,18 @@ class v8SegmentationLoss(v8DetectionLoss):
             else None
         )
         self.pika_area = float(getattr(model.args, "pika_area", 0.0) or 0.0)
-        # pika: anti-aliased ROI targets — k x k sub-samples per cell give the
-        # fractional coverage instead of a 0/1 membership test, so the target's
-        # 0.5 level set sits on the polygon and the labels stop lying by +-0.5 px.
-        self.pika_soft = int(getattr(model.args, "pika_gt_soft", 0) or 0)
+        # pika: distance-band ROI targets — box-filter the rasterised GT at +-r input
+        # pixels so the target ramps linearly through signed distance instead of
+        # stepping, and BCE supervises the zero crossing directly (see sample_gt).
+        self.pika_band = float(getattr(model.args, "pika_gt_band", 0.0) or 0.0)
+        self.pika_taps = int(getattr(model.args, "pika_gt_taps", 4) or 4)
         # pika: Segment26RDR's shared ROI boundary refiner lives on the head but is
         # exercised in the loss (deep supervision), so it is fetched, not rebuilt.
         self.pika_refiner = getattr(head, "refine", None)
         self.pika_coarse = float(getattr(head, "COARSE_GAIN", 0.5))
-        assert self.pika_soft <= int(getattr(model.args, "pika_gt_scale", 1) or 1), (
-            "pika_gt_soft needs pika_gt_scale >= it: sub-sampling a 1x raster k times per "
-            "cell hits the same pixel k**2 times and yields a hard target again"
+        assert not self.pika_band or self.pika_roi, (
+            "pika_gt_band is an ROI-space target (Segment26RD family); the stock path "
+            "has no per-instance grid to filter the GT on"
         )
 
     def loss(self, preds: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
@@ -669,7 +670,8 @@ class v8SegmentationLoss(v8DetectionLoss):
                         sizes=self.pika_sizes,
                         iou_index=self.pika_iou_index,
                         area_gain=self.pika_area,
-                        soft=self.pika_soft,
+                        band=self.pika_band,
+                        taps=self.pika_taps,
                         refiner=self.pika_refiner,
                         image=None if imgs is None else imgs[i],
                         coarse_gain=self.pika_coarse,

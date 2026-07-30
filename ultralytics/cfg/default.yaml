@@ -44,7 +44,7 @@ compile: False # (bool | str) enable torch.compile() backend='inductor'; True="d
 overlap_mask: True # (bool) merge instance masks into one mask during training (segment only)
 mask_ratio: 4 # (int) mask downsample ratio (segment only)
 pika_gt_scale: 1 # (int) pika: GT rasterisation upscale, 1=off (2/4 = sub-pixel labels; needs an ROI head)
-pika_gt_soft: 0 # (int) pika: anti-aliased ROI targets, kxk sub-samples per cell (0=off; needs pika_gt_scale>=k)
+pika_gt_taps: 4 # (int) pika: sub-samples per axis realising the pika_gt_band box filter
 
 # Classification
 dropout: 0.0 # (float) dropout for classification head (classify only)
@@ -107,6 +107,7 @@ box: 7.5 # (float) box loss gain
 pika_dice: 0.0 # (float) pika: soft-Dice mask loss gain (0=off; boundary-aware seg)
 pika_area: 0.0 # (float) pika: ROI soft-area consistency gain (0=off; Segment26RD family)
 pika_boundary: 0.0 # (float) pika: boundary-band BCE mask loss gain (0=off)
+pika_gt_band: 0.0 # (float) pika: distance-band ROI target radius in input px (0=hard labels; needs an ROI head)
 cls: 0.5 # (float) classification loss gain
 cls_pw: 0.0 # (float) class weights power for handling class imbalance (0.0=disable, 1.0=full inverse frequency)
 dfl: 1.5 # (float) distribution focal loss gain

@@ -690,6 +690,20 @@ class Segment26RDR(Segment26RDNS):
         return out
 
 
+class Segment26RDRIQ(Segment26RDR, Segment26RDIQ):
+    """Segment26RDR + the mask-quality channel (pika Round 16).
+
+    The two mechanisms address the two halves of the Round 15 error budget and do
+    not touch each other: the refiner re-decides mask *pixels* from appearance, the
+    quality channel re-orders *detections* by predicted mask IoU (``oracle_score``
+    was still worth +0.020 on top of the quality-calibrated best). Both are pure
+    additions to RDNS with disjoint parameters, so composing them is a class
+    statement — RDR contributes ``__init__``/``forward`` (the refiner and the image
+    hand-off), RDIQ contributes ``IOU_HEAD`` and the score calibration in
+    ``_inference``.
+    """
+
+
 class OBB(Detect):
     """YOLO OBB detection head for detection with rotation models.
 

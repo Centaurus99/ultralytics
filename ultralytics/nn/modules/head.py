@@ -669,6 +669,7 @@ class Segment26RDR(Segment26RDNS):
 
     REFINE_CH = 16  # width of the refiner's hidden convs
     REFINE_INIT = 1.0  # ordinary init is already a ~0.04-logit start; do not damp it
+    REFINE_WHITEN = False  # standardise the image patch within each ROI window
     COARSE_GAIN = 0.5  # deep supervision weight on the pre-refinement logits
     PIKA_WANTS_IMG = True
 
@@ -677,7 +678,7 @@ class Segment26RDR(Segment26RDNS):
         super().__init__(nc, nm, npr, reg_max, end2end, ch)
         from ultralytics.nn.modules.custom import RoiRefiner
 
-        self.refine = RoiRefiner(self.REFINE_CH, self.REFINE_INIT)
+        self.refine = RoiRefiner(self.REFINE_CH, self.REFINE_INIT, whiten=self.REFINE_WHITEN)
 
     def forward(self, x: list[torch.Tensor]) -> tuple | list[torch.Tensor] | dict[str, torch.Tensor]:
         """Attach the refiner and the input batch to the eval-time decode args."""
@@ -702,6 +703,24 @@ class Segment26RDRIQ(Segment26RDR, Segment26RDIQ):
     hand-off), RDIQ contributes ``IOU_HEAD`` and the score calibration in
     ``_inference``.
     """
+
+
+class Segment26RDRIQW(Segment26RDRIQ):
+    """Segment26RDRIQ whose refiner sees local contrast, not raw radiometry (Round 18).
+
+    Round 17 established that the refiner's negative transfer was the ROI window
+    it trained on, and fixed it — but the module's own contribution then landed at
+    +0.0008, indistinguishable from noise. The next most likely reason is what it
+    is fed: raw [0, 1] input whose mean is ~0.4, so most of the stack's input
+    energy is a DC term, and on aerial grassland that term moves with albedo and
+    exposure between images while the rim contrast it has to find does not.
+    Standardising each ROI patch costs no parameters and no inference time.
+
+    A separate head rather than a change to the existing one, because every
+    archived checkpoint has to stay re-scorable and this alters the module's input.
+    """
+
+    REFINE_WHITEN = True
 
 
 class OBB(Detect):

@@ -80,10 +80,11 @@ class SegmentationPredictor(DetectionPredictor):
                 boxes, and masks.
         """
         self._pika_rd = getattr(protos, "_pika_rd", None)  # Segment26RD: read before per-image indexing
-        return [
-            self.construct_result(pred, img, orig_img, img_path, proto)
-            for pred, orig_img, img_path, proto in zip(preds, orig_imgs, self.batch[0], protos)
-        ]
+        out = []
+        for i, (pred, orig_img, img_path, proto) in enumerate(zip(preds, orig_imgs, self.batch[0], protos)):
+            self._pika_si = i  # pika: the ROI refiner reads images[i]; keep the base signature
+            out.append(self.construct_result(pred, img, orig_img, img_path, proto))
+        return out
 
     def construct_result(self, pred, img, orig_img, img_path, proto):
         """Construct a single result object from the prediction.
@@ -101,7 +102,9 @@ class SegmentationPredictor(DetectionPredictor):
         if pred.shape[0] == 0:  # save empty boxes
             masks = None
         elif getattr(self, "_pika_rd", None) is not None:  # Segment26RD ROI decoding
-            masks = decode_rois(proto, pred[:, 6:], pred[:, :4], img.shape[2:], **self._pika_rd)  # NHW
+            masks = decode_rois(
+                proto, pred[:, 6:], pred[:, :4], img.shape[2:], image_index=self._pika_si, **self._pika_rd
+            )  # NHW
             pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
         elif self.args.retina_masks:
             pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)

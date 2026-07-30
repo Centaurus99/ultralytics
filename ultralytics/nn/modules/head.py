@@ -482,6 +482,8 @@ class Segment26RD(Segment26):
     STAMP = 8  # instance stamp side; per-anchor mask channels = nm + STAMP**2
     TRAIN_SIZES = (28,)  # training ROI grid buckets (see pika.modules.roi_mask_loss)
     IOU_HEAD = 0  # 1 => one extra cv4 channel: mask-quality logit (Mask-Scoring style)
+    PIKA_WANTS_IMG = False  # True => ``_predict_once`` stashes the input on ``pika_img``
+    pika_img = None  # raw input tensor, for mechanisms that read above stride 8
 
     def __init__(self, nc: int = 80, nm: int = 32, npr: int = 256, reg_max=16, end2end=False, ch: tuple = ()):
         """Build cv4 for ``nm + STAMP**2 (+1)`` channels but keep ``nm`` boundary-gated prototypes."""
@@ -505,6 +507,18 @@ class Segment26RD(Segment26):
             proto = out[1] if self.export else out[0][1]
             proto._pika_rd = self.pika_roi
         return out
+
+    def take_img(self) -> torch.Tensor:
+        """Consume the input batch stashed by ``_predict_once``, clearing the slot.
+
+        ``pika_img`` is a plain attribute of a module, so anything left in it is
+        *pickled into every checkpoint*: leaving one batch behind grew the Round 14
+        ``r14_rdg`` weights to 180 MB against 55 MB for the same net without the
+        image path. Consumers must take the tensor rather than read it.
+        """
+        img, self.pika_img = self.pika_img, None
+        assert img is not None, f"{type(self).__name__} needs the input image on pika_img"
+        return img
 
 
 class Segment26RDNS(Segment26RD):
@@ -589,7 +603,7 @@ class Segment26RDG(Segment26RDNS):
     """
 
     IMG_PROTOS = 4
-    PIKA_WANTS_IMG = True  # ``_predict_once`` stashes the input image on the proto
+    PIKA_WANTS_IMG = True
     # Multiplier applied to the fresh init of the image-prototype coefficient rows.
     # 0 = start exactly at the transplanted model's behaviour (Round 14 first form);
     # None = leave the fresh init alone. A zero start turned out to be a trap: after
@@ -613,6 +627,11 @@ class Segment26RDG(Segment26RDNS):
                             seq[-1].weight[nm:].mul_(self.IMG_ROW_INIT)
                             seq[-1].bias[nm:].mul_(self.IMG_ROW_INIT)
 
+    def forward(self, x: list[torch.Tensor]) -> tuple | list[torch.Tensor] | dict[str, torch.Tensor]:
+        """Hand the stashed input image down to the prototype module."""
+        self.proto.pika_img = self.take_img()
+        return super().forward(x)
+
 
 class Segment26RDGW(Segment26RDG):
     """Segment26RDG whose image-prototype rows keep their fresh initialisation.
@@ -626,6 +645,49 @@ class Segment26RDGW(Segment26RDG):
     """
 
     IMG_ROW_INIT = None
+
+
+class Segment26RDR(Segment26RDNS):
+    """Segment26RDNS + an appearance-conditioned ROI boundary refiner (pika Round 15).
+
+    A decoded mask is a pointwise linear combination of prototypes sampled off a
+    stride-4 map, so its logit field is band-limited at 4 px no matter how densely
+    the ROI grid supersamples it — while Round 14's error budget put *all* the
+    remaining AP in sub-pixel boundary quality on ~14 px holes. The only stride-1
+    signal in the network is the input image, and the ROI grid already knows how
+    to read any map covering the input extent, so a small shared conv stack
+    refines each instance's coarse logits from its own image patch
+    (``pika.modules.RoiRefiner``, which carries the design rationale).
+
+    Topology is otherwise untouched: ``nm`` unchanged, no extra coefficient
+    channels, decode buckets and loss identical, so an RDNS checkpoint transplants
+    into this head exactly and only the refiner starts fresh. The refiner is used
+    in the *loss* (deep supervision keeps the coarse path supervised at
+    ``COARSE_GAIN``) and in ``decode_rois`` at inference, which is why the head
+    ships it inside ``pika_roi`` at eval time along with the batch it saw.
+    """
+
+    REFINE_CH = 16  # width of the refiner's hidden convs
+    REFINE_INIT = 1.0  # ordinary init is already a ~0.04-logit start; do not damp it
+    COARSE_GAIN = 0.5  # deep supervision weight on the pre-refinement logits
+    PIKA_WANTS_IMG = True
+
+    def __init__(self, nc: int = 80, nm: int = 32, npr: int = 256, reg_max=16, end2end=False, ch: tuple = ()):
+        """Build an RDNS head, then attach the shared ROI refiner."""
+        super().__init__(nc, nm, npr, reg_max, end2end, ch)
+        from ultralytics.nn.modules.custom import RoiRefiner
+
+        self.refine = RoiRefiner(self.REFINE_CH, self.REFINE_INIT)
+
+    def forward(self, x: list[torch.Tensor]) -> tuple | list[torch.Tensor] | dict[str, torch.Tensor]:
+        """Attach the refiner and the input batch to the eval-time decode args."""
+        out = super().forward(x)
+        img = self.take_img()  # never leave a batch on the module: it gets pickled
+        if not self.training:
+            proto = out[1] if self.export else out[0][1]
+            # The dict keeps the only reference, and it rides a transient tensor.
+            proto._pika_rd = {**self.pika_roi, "refiner": self.refine, "images": img}
+        return out
 
 
 class OBB(Detect):

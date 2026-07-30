@@ -44,6 +44,7 @@ compile: False # (bool | str) enable torch.compile() backend='inductor'; True="d
 overlap_mask: True # (bool) merge instance masks into one mask during training (segment only)
 mask_ratio: 4 # (int) mask downsample ratio (segment only)
 pika_gt_scale: 1 # (int) pika: GT rasterisation upscale, 1=off (2/4 = sub-pixel labels; needs an ROI head)
+pika_gt_soft: 0 # (int) pika: anti-aliased ROI targets, kxk sub-samples per cell (0=off; needs pika_gt_scale>=k)
 
 # Classification
 dropout: 0.0 # (float) dropout for classification head (classify only)

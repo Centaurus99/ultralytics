@@ -497,20 +497,32 @@ class v8SegmentationLoss(v8DetectionLoss):
         self.pika_dice = float(getattr(model.args, "pika_dice", 0.0) or 0.0)
         self.pika_boundary = float(getattr(model.args, "pika_boundary", 0.0) or 0.0)
         # pika: ROI-supersampled mask decoding (Segment26RD) — {"ncoef": .., "stamp": ..} or None.
-        self.pika_roi = getattr(model.model[-1], "pika_roi", None)
+        head = model.model[-1]
+        self.pika_roi = getattr(head, "pika_roi", None)
         assert int(getattr(model.args, "pika_gt_scale", 1) or 1) == 1 or self.pika_roi, (
             "pika_gt_scale needs an ROI-decoding head (Segment26RD family): the stock path "
             "upsamples the prototypes to the GT grid, which a k-times raster makes intractable"
         )
-        self.pika_sizes = getattr(model.model[-1], "TRAIN_SIZES", (28,))
+        self.pika_sizes = getattr(head, "TRAIN_SIZES", (28,))
         # pika: mask-quality channel index (Segment26RDIQ) and area-consistency gain.
-        head = model.model[-1]
         self.pika_iou_index = (
             head.pika_roi["ncoef"] + head.pika_roi["stamp"] ** 2
             if self.pika_roi and getattr(head, "IOU_HEAD", 0)
             else None
         )
         self.pika_area = float(getattr(model.args, "pika_area", 0.0) or 0.0)
+        # pika: anti-aliased ROI targets — k x k sub-samples per cell give the
+        # fractional coverage instead of a 0/1 membership test, so the target's
+        # 0.5 level set sits on the polygon and the labels stop lying by +-0.5 px.
+        self.pika_soft = int(getattr(model.args, "pika_gt_soft", 0) or 0)
+        # pika: Segment26RDR's shared ROI boundary refiner lives on the head but is
+        # exercised in the loss (deep supervision), so it is fetched, not rebuilt.
+        self.pika_refiner = getattr(head, "refine", None)
+        self.pika_coarse = float(getattr(head, "COARSE_GAIN", 0.5))
+        assert self.pika_soft <= int(getattr(model.args, "pika_gt_scale", 1) or 1), (
+            "pika_gt_soft needs pika_gt_scale >= it: sub-sampling a 1x raster k times per "
+            "cell hits the same pixel k**2 times and yields a hard target again"
+        )
 
     def loss(self, preds: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         """Calculate and return the combined loss for detection and segmentation."""
@@ -546,6 +558,7 @@ class v8SegmentationLoss(v8DetectionLoss):
                 proto,
                 pred_masks,
                 imgsz,
+                imgs=batch["img"],
             )
             if pred_semantic is not None:
                 sem_masks = batch["sem_masks"].to(self.device)  # NxHxW
@@ -615,6 +628,7 @@ class v8SegmentationLoss(v8DetectionLoss):
         proto: torch.Tensor,
         pred_masks: torch.Tensor,
         imgsz: torch.Tensor,
+        imgs: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Calculate the loss for instance segmentation.
 
@@ -627,6 +641,8 @@ class v8SegmentationLoss(v8DetectionLoss):
             proto (torch.Tensor): Prototype masks of shape (BS, 32, H, W).
             pred_masks (torch.Tensor): Predicted masks for each anchor of shape (BS, N_anchors, 32).
             imgsz (torch.Tensor): Size of the input image as a tensor of shape (2), i.e., (H, W).
+            imgs (torch.Tensor, optional): The input batch (BS, 3, H, W) — needed only by the
+                pika ROI boundary refiner, which reads appearance on the ROI grids.
 
         Returns:
             (torch.Tensor): The calculated loss for instance segmentation.
@@ -653,6 +669,10 @@ class v8SegmentationLoss(v8DetectionLoss):
                         sizes=self.pika_sizes,
                         iou_index=self.pika_iou_index,
                         area_gain=self.pika_area,
+                        soft=self.pika_soft,
+                        refiner=self.pika_refiner,
+                        image=None if imgs is None else imgs[i],
+                        coarse_gain=self.pika_coarse,
                         **self.pika_roi,
                     )
                 else:  # keep DDP gradients alive, mirroring the stock path below

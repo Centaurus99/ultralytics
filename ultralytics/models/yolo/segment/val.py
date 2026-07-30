@@ -109,7 +109,7 @@ class SegmentationValidator(DetectionValidator):
         for i, pred in enumerate(preds):
             coefficient = pred.pop("extra")
             if rd is not None:
-                pred["masks"] = decode_rois(proto[i], coefficient, pred["bboxes"], imgsz, **rd)
+                pred["masks"] = decode_rois(proto[i], coefficient, pred["bboxes"], imgsz, image_index=i, **rd)
             else:
                 pred["masks"] = self.process(proto[i], coefficient, pred["bboxes"], shape=imgsz)
         return preds

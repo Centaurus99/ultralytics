@@ -75,6 +75,7 @@ from ultralytics.nn.modules import (
     Segment26RDNSP2,
     Segment26RDG,
     Segment26RDGW,
+    Segment26RDR,
     SemanticSegment,
     TorchVision,
     WorldDetect,
@@ -199,9 +200,11 @@ class BaseModel(torch.nn.Module):
         embed = frozenset(embed) if embed is not None else {-1}
         max_idx = max(embed)
         if getattr(self.model[-1], "PIKA_WANTS_IMG", False):
-            # pika: image-guided prototypes need the raw input, which never reaches the
-            # head through the feature list (see pika.modules.GuidedProto).
-            self.model[-1].proto.pika_img = x
+            # pika: mechanisms that need evidence above stride 8 read the raw input,
+            # which never reaches the head through the feature list — image-guided
+            # prototypes (pika.modules.GuidedProto) and the ROI boundary refiner
+            # (pika.modules.RoiRefiner). The head routes it on from here.
+            self.model[-1].pika_img = x
         for m in self.model:
             if m.f != -1:  # if not from previous layer
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
@@ -2018,6 +2021,7 @@ def parse_model(d, ch, verbose=True):
                 Segment26RDNSP2,
                 Segment26RDG,
                 Segment26RDGW,
+                Segment26RDR,
                 YOLOESegment,
                 YOLOESegment26,
                 Pose,

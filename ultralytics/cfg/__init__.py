@@ -201,6 +201,7 @@ CFG_FLOAT_KEYS = frozenset(
         "pika_area",
         "pika_boundary",
         "pika_gt_band",
+        "pika_roi_jitter",
         "cls",
         "dfl",
         "dis",

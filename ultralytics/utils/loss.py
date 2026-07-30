@@ -516,6 +516,9 @@ class v8SegmentationLoss(v8DetectionLoss):
         # stepping, and BCE supervises the zero crossing directly (see sample_gt).
         self.pika_band = float(getattr(model.args, "pika_gt_band", 0.0) or 0.0)
         self.pika_taps = int(getattr(model.args, "pika_gt_taps", 4) or 4)
+        # pika: draw the training ROI window from the box distribution inference
+        # decodes in, instead of from the assigner's exact GT box (see roi_mask_loss).
+        self.pika_jitter = float(getattr(model.args, "pika_roi_jitter", 0.0) or 0.0)
         # pika: Segment26RDR's shared ROI boundary refiner lives on the head but is
         # exercised in the loss (deep supervision), so it is fetched, not rebuilt.
         self.pika_refiner = getattr(head, "refine", None)
@@ -672,6 +675,7 @@ class v8SegmentationLoss(v8DetectionLoss):
                         area_gain=self.pika_area,
                         band=self.pika_band,
                         taps=self.pika_taps,
+                        jitter=self.pika_jitter,
                         refiner=self.pika_refiner,
                         image=None if imgs is None else imgs[i],
                         coarse_gain=self.pika_coarse,

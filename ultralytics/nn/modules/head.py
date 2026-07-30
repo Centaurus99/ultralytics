@@ -590,6 +590,12 @@ class Segment26RDG(Segment26RDNS):
 
     IMG_PROTOS = 4
     PIKA_WANTS_IMG = True  # ``_predict_once`` stashes the input image on the proto
+    # Multiplier applied to the fresh init of the image-prototype coefficient rows.
+    # 0 = start exactly at the transplanted model's behaviour (Round 14 first form);
+    # None = leave the fresh init alone. A zero start turned out to be a trap: after
+    # 80 fine-tune epochs those rows were still ~300x smaller than the feature rows,
+    # i.e. the pathway was never switched on and the arm tested nothing.
+    IMG_ROW_INIT: float | None = 0.0
 
     def __init__(self, nc: int = 80, nm: int = 32, npr: int = 256, reg_max=16, end2end=False, ch: tuple = ()):
         """Build ``nm`` feature prototypes plus ``IMG_PROTOS`` image-derived ones."""
@@ -599,12 +605,27 @@ class Segment26RDG(Segment26RDNS):
 
         self.proto = GuidedProto(ch, self.npr, total, nc, n_img=self.IMG_PROTOS)
         self.pika_roi = {"ncoef": total, "stamp": self.STAMP}
-        for head in (self.cv4, getattr(self, "one2one_cv4", None)):
-            if head is not None:
-                for seq in head:
-                    with torch.no_grad():  # image-prototype rows fade in residually from zero
-                        seq[-1].weight[nm:].zero_()
-                        seq[-1].bias[nm:].zero_()
+        if self.IMG_ROW_INIT is not None:
+            for head in (self.cv4, getattr(self, "one2one_cv4", None)):
+                if head is not None:
+                    for seq in head:
+                        with torch.no_grad():  # image-prototype coefficient rows
+                            seq[-1].weight[nm:].mul_(self.IMG_ROW_INIT)
+                            seq[-1].bias[nm:].mul_(self.IMG_ROW_INIT)
+
+
+class Segment26RDGW(Segment26RDG):
+    """Segment26RDG whose image-prototype rows keep their fresh initialisation.
+
+    The zero-start variant never left zero inside an 80-epoch fine-tune (the
+    trained rows stayed ~300x below the feature rows), so the arm could not
+    distinguish "the image evidence does not help" from "the pathway was never
+    switched on". This form starts the guided channels at ordinary conv
+    initialisation: they contribute from step one, and the model must actively
+    suppress them if they are useless.
+    """
+
+    IMG_ROW_INIT = None
 
 
 class OBB(Detect):

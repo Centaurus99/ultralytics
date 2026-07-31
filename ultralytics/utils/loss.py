@@ -511,6 +511,13 @@ class v8SegmentationLoss(v8DetectionLoss):
             else None
         )
         self.pika_area = float(getattr(model.args, "pika_area", 0.0) or 0.0)
+        # pika: score the quality target the way AP will read the mask — binarised
+        # at the deployed tau, not as a soft IoU over probabilities (see roi_mask_loss).
+        self.pika_iq_tau = float(getattr(model.args, "pika_iq_tau", 0.0) or 0.0)
+        assert not self.pika_iq_tau or self.pika_iou_index is not None, (
+            "pika_iq_tau retargets the mask-quality channel; the head has none "
+            "(use a Segment26RDIQ-family head)"
+        )
         # pika: distance-band ROI targets — box-filter the rasterised GT at +-r input
         # pixels so the target ramps linearly through signed distance instead of
         # stepping, and BCE supervises the zero crossing directly (see sample_gt).
@@ -672,6 +679,7 @@ class v8SegmentationLoss(v8DetectionLoss):
                         hw,
                         sizes=self.pika_sizes,
                         iou_index=self.pika_iou_index,
+                        iou_tau=self.pika_iq_tau,
                         area_gain=self.pika_area,
                         band=self.pika_band,
                         taps=self.pika_taps,

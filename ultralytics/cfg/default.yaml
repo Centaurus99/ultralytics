@@ -109,6 +109,7 @@ pika_area: 0.0 # (float) pika: ROI soft-area consistency gain (0=off; Segment26R
 pika_boundary: 0.0 # (float) pika: boundary-band BCE mask loss gain (0=off)
 pika_gt_band: 0.0 # (float) pika: distance-band ROI target radius in input px (0=hard labels; needs an ROI head)
 pika_roi_jitter: 0.0 # (float) pika: per-corner box noise in px for the training ROI window (0=exact GT box)
+pika_iq_tau: 0.0 # (float) pika: binarise the mask-quality target at this tau (0=soft IoU; needs an IoU head)
 cls: 0.5 # (float) classification loss gain
 cls_pw: 0.0 # (float) class weights power for handling class imbalance (0.0=disable, 1.0=full inverse frequency)
 dfl: 1.5 # (float) distribution focal loss gain

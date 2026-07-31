@@ -541,11 +541,21 @@ class Segment26RDIQ(Segment26RDNS):
     """
 
     IOU_HEAD = 1
+    # Exponent on the quality factor at inference. 1.0 is the trained behaviour
+    # (score = cls * q); >1 lets predicted mask quality outvote a near-saturated
+    # class score, <1 damps it. Ranking is the largest pool left in the error
+    # budget (oracle_score is still +0.020 on top of the calibrated best) while
+    # detection is essentially solved (AP50 0.973), so how hard the two are mixed
+    # is a free parameter that was never actually chosen — and it is an
+    # *inference* parameter, so it can be swept on archived weights instead of
+    # being bought one 80-epoch arm at a time (scripts/score_run.py --iq-pow).
+    IQ_POW = 1.0
 
     def _inference(self, x: dict[str, torch.Tensor]) -> torch.Tensor:
         """Calibrate class scores by predicted mask quality before top-k."""
         preds = super()._inference(x)  # (bs, 4 + nc + nm, N); quality logit is last
-        preds[:, 4 : 4 + self.nc] *= preds[:, -1:].sigmoid()
+        q = preds[:, -1:].sigmoid()
+        preds[:, 4 : 4 + self.nc] *= q if self.IQ_POW == 1.0 else q.pow(self.IQ_POW)
         return preds
 
 
